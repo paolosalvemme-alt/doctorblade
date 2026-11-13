@@ -434,3 +434,199 @@ def test_reconnect_after_emergency_requires_reset_confirmation(
 
     assert connect_calls == []
     assert window.emergency_latched is True
+
+
+def test_endstop_monitor_counts_lever_transitions(window: MainWindow) -> None:
+    window._set_x_endstop_status(False)
+    window._set_x_endstop_status(True)
+    window._set_x_endstop_status(True)
+    window._set_x_endstop_status(False)
+
+    assert window.endstop_transitions == 2
+    assert window.endstop_changes_label.text() == "State changes seen: 2"
+
+
+def test_endstop_monitor_requires_ready_controller(window: MainWindow) -> None:
+    messages: list[str] = []
+    window._show_error = messages.append  # type: ignore[method-assign]
+
+    window.endstop_monitor_check.setChecked(True)
+
+    assert window.endstop_monitor_check.isChecked() is False
+    assert not window.endstop_timer.isActive()
+    assert messages
+
+
+def test_endstop_poll_sends_only_nonblocking_m119(window: MainWindow) -> None:
+    completed = threading.Event()
+    calls: list[tuple[str, bool, float, bool]] = []
+
+    class FakeSerial:
+        is_connected = True
+
+        def send_command(self, command, *, wait_for_ok, timeout, block) -> bool:
+            calls.append((command, wait_for_ok, timeout, block))
+            completed.set()
+            return True
+
+    window.serial_link = FakeSerial()  # type: ignore[assignment]
+    window.controller_ready = True
+
+    window._poll_endstop()
+
+    assert completed.wait(1.0)
+    assert calls == [("M119", True, 3.0, False)]
+
+
+def test_endstop_poll_is_skipped_during_machine_operation(window: MainWindow) -> None:
+    calls: list[str] = []
+
+    class FakeSerial:
+        is_connected = True
+
+        def send_command(self, command, **kwargs) -> bool:
+            calls.append(command)
+            return True
+
+    window.serial_link = FakeSerial()  # type: ignore[assignment]
+    window.controller_ready = True
+    window.command_jobs.append((object(), object()))  # type: ignore[arg-type]
+    try:
+        window._poll_endstop()
+    finally:
+        window.command_jobs.clear()
+
+    assert calls == []
+    assert window.endstop_poll_active is False
+
+
+def test_disconnect_ui_stops_endstop_monitor(window: MainWindow) -> None:
+    window.endstop_monitor_check.blockSignals(True)
+    window.endstop_monitor_check.setChecked(True)
+    window.endstop_monitor_check.blockSignals(False)
+    window.endstop_timer.start()
+
+    window._update_connection_ui(False)
+
+    assert window.endstop_monitor_check.isChecked() is False
+    assert not window.endstop_timer.isActive()
+
+
+def test_startup_handshake_checks_bed_report(window: MainWindow) -> None:
+    captured = []
+
+    class FakeSerial:
+        is_connected = True
+
+    def run_sequence(commands, success_message, on_success=None, **kwargs) -> None:
+        captured.extend(commands)
+        assert kwargs["on_response"] == window._check_bed_reported
+
+    window.serial_link = FakeSerial()  # type: ignore[assignment]
+    window.controller_ready = False
+    window._run_command_sequence = run_sequence  # type: ignore[method-assign]
+
+    window._initialize_controller(window.connection_generation)
+
+    assert [item.command for item in captured] == ["M115", "M105"]
+    assert captured[1].capture_response is True
+
+
+def test_missing_bed_in_firmware_disables_bed_controls(window: MainWindow) -> None:
+    messages: list[str] = []
+    window._show_error = messages.append  # type: ignore[method-assign]
+
+    window._check_bed_reported(["ok T:20.0 /0.0 @:0"])
+
+    assert window.bed_available is False
+    assert window.set_bed_button.isEnabled() is False
+    assert window.wait_bed_button.isEnabled() is False
+    assert window.heater_off_button.isEnabled() is True
+    assert "TEMP_SENSOR_BED" in messages[0]
+
+    window._check_bed_reported(["ok T:20.0 /0.0 B:21.0 /0.0 @:0 B@:0"])
+
+    assert window.bed_available is True
+    assert window.set_bed_button.isEnabled() is True
+
+
+class _HeaterFakeSerial:
+    is_connected = True
+
+    def __init__(self) -> None:
+        self.commands: list[tuple[str, bool]] = []
+
+    def send_immediate(self, command: str, *, abort_pending: bool = False) -> None:
+        self.commands.append((command, abort_pending))
+
+
+def test_bed_power_is_displayed(window: MainWindow) -> None:
+    window._handle_serial_line("ok T:20.0 /0.0 B:30.0 /60.0 @:0 B@:127")
+
+    assert window.bed_power_label.text() == "100 % (B@:127)"
+    assert window.current_bed_label.text() == "30.0"
+
+
+def test_open_thermistor_while_heating_turns_heater_off(window: MainWindow) -> None:
+    messages: list[str] = []
+    fake = _HeaterFakeSerial()
+    window.serial_link = fake  # type: ignore[assignment]
+    window._show_error = messages.append  # type: ignore[method-assign]
+
+    window._handle_serial_line("ok T:20.0 /0.0 B:-14.0 /60.0 @:0 B@:127")
+    window._handle_serial_line("ok T:20.0 /0.0 B:-14.0 /60.0 @:0 B@:127")
+
+    assert ("M140 S0", True) in fake.commands
+    assert len(messages) == 1
+    assert "PC4" in messages[0]
+    assert window.thermistor_status_label.objectName() == "faultReadout"
+
+
+def test_bed_that_does_not_heat_is_switched_off(window: MainWindow, monkeypatch) -> None:
+    messages: list[str] = []
+    fake = _HeaterFakeSerial()
+    now = [0.0]
+    window.serial_link = fake  # type: ignore[assignment]
+    window._show_error = messages.append  # type: ignore[method-assign]
+    monkeypatch.setattr(window, "_clock", lambda: now[0])
+
+    window._handle_serial_line("ok T:20.0 /0.0 B:21.0 /60.0 @:0 B@:127")
+    now[0] = 130.0
+    window._handle_serial_line("ok T:20.0 /0.0 B:21.5 /60.0 @:0 B@:127")
+
+    assert fake.commands == [("M140 S0", True)]
+    assert "HB" in messages[0]
+
+
+def test_marlin_warning_includes_wiring_hint(window: MainWindow, monkeypatch) -> None:
+    shown: list[str] = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        staticmethod(lambda _parent, _title, message, *a, **k: shown.append(message)),
+    )
+
+    window._handle_marlin_warning("Error:MINTEMP triggered, system stopped! Heater_ID: bed")
+
+    assert "THB" in shown[0]
+
+
+def test_profile_with_bed_temperature_is_blocked_without_bed(window: MainWindow) -> None:
+    messages: list[str] = []
+
+    class FakeSerial:
+        is_connected = True
+
+    window.serial_link = FakeSerial()  # type: ignore[assignment]
+    window.controller_ready = True
+    window.homed = True
+    window.bed_available = False
+    window._show_error = messages.append  # type: ignore[method-assign]
+    window.profile_segments = [
+        main_blade.CoatingSegment(10.0, 5.0, 300.0, 0.0, bed_temp_c=50.0)
+    ]
+
+    window._run_profile()
+
+    assert window.profile_thread is None
+    assert "no bed heater" in messages[0]

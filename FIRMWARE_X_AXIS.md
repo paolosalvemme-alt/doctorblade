@@ -63,6 +63,19 @@ for an inverted motor: that would describe an X-max homing arrangement.
 The correct `X_MIN_ENDSTOP_HIT_STATE` also depends on switch wiring. Determine
 it from `M119`; do not guess it.
 
+## SKR Mini E3 V3 Endstop Hardware
+
+- The X-min switch goes on the 2-pin `X-STOP` connector: `GND` and `PC0`.
+- Remove the `X-DIAG` jumper. It connects the TMC2209 DIAG output to the same
+  `PC0` line for sensorless homing and corrupts a mechanical switch reading.
+- Keep `SENSORLESS_HOMING` disabled and keep `ENDSTOPPULLUPS` (or at least
+  `ENDSTOPPULLUP_XMIN`) enabled.
+- A normally-closed switch (`COM` to `GND`, `NC` to `PC0`) is preferred: a
+  broken wire then reads `TRIGGERED` and the application blocks homing.
+
+Full wiring instructions (Italian) are in
+[`COLLEGAMENTI_SKR_MINI_E3_V3.md`](COLLEGAMENTI_SKR_MINI_E3_V3.md).
+
 ## Controlled Verification
 
 Perform these checks without the blade, with the heater off, at low speed, and

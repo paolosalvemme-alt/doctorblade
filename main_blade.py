@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import sys
 import threading
+import time
 from typing import Callable
 
 from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal, Slot
@@ -43,23 +44,32 @@ from gcode import (
     cmd_steps_x,
     feedrate_mm_min,
     format_gcode_number,
+    parse_bed_power,
     parse_bed_temp,
     parse_x_min_endstop,
     parse_x_min_endstop_response,
     parse_x_position,
     parse_x_steps,
+    response_reports_bed,
     staged_home_pretravel,
     validate_x_min_open_response,
+)
+from diagnostics import (
+    BedHeatingWatch,
+    bed_power_percent,
+    classify_bed_reading,
+    explain_marlin_message,
 )
 from marlin_serial import MarlinSerial
 from profile_model import CoatingProfile, CoatingSegment
 from settings_manager import AppSettings, SettingsManager
 
 
-APP_DISPLAY_NAME = "Doctor Blade Controller V3.0.5"
-APP_VERSION = "3.0.5"
+APP_DISPLAY_NAME = "Doctor Blade Controller V3.0.6"
+APP_VERSION = "3.0.6"
 STAGED_HOME_MARGIN_MM = 40.0
 STAGED_HOME_FAST_SPEED_MM_S = 10.0
+ENDSTOP_MONITOR_INTERVAL_MS = 500
 
 
 @dataclass(frozen=True)
@@ -77,6 +87,7 @@ class SerialSignalBridge(QObject):
     warning_received = Signal(str)
     disconnected = Signal(str)
     temperature_poll_failed = Signal(str)
+    endstop_poll_failed = Signal(str)
 
 
 class SerialCommandWorker(QObject):
@@ -304,6 +315,7 @@ class MainWindow(QMainWindow):
         self.bridge.warning_received.connect(self._handle_marlin_warning)
         self.bridge.disconnected.connect(self._handle_serial_disconnect)
         self.bridge.temperature_poll_failed.connect(self._temperature_poll_failed)
+        self.bridge.endstop_poll_failed.connect(self._endstop_poll_failed)
 
         self.command_jobs: list[tuple[QThread, SerialCommandWorker]] = []
         self.profile_thread: QThread | None = None
@@ -316,10 +328,20 @@ class MainWindow(QMainWindow):
         self.emergency_latched = False
         self.connection_generation = 0
         self.temperature_poll_active = False
+        self.endstop_poll_active = False
+        self.last_x_endstop_state: bool | None = None
+        self.endstop_transitions = 0
+        self.bed_available: bool | None = None
+        self.bed_heating_watch = BedHeatingWatch()
+        self.thermistor_fault: str | None = None
 
         self.temp_timer = QTimer(self)
         self.temp_timer.setInterval(2000)
         self.temp_timer.timeout.connect(self._poll_temperature)
+
+        self.endstop_timer = QTimer(self)
+        self.endstop_timer.setInterval(ENDSTOP_MONITOR_INTERVAL_MS)
+        self.endstop_timer.timeout.connect(self._poll_endstop)
 
         self._build_ui()
         self._apply_settings_to_ui()
@@ -526,6 +548,14 @@ class MainWindow(QMainWindow):
                 font-weight: 700;
                 padding: 6px 8px;
             }
+            QLabel#faultReadout {
+                background: #ffe0e0;
+                border: 1px solid #c94b4b;
+                border-radius: 6px;
+                color: #7a1414;
+                font-weight: 700;
+                padding: 6px 8px;
+            }
             QLabel#calibrationReadout {
                 background: #eadfff;
                 border: 1px solid #b59bea;
@@ -605,6 +635,17 @@ class MainWindow(QMainWindow):
         self.endstop_status_label = QLabel("Unknown")
         self.endstop_status_label.setObjectName("endstopUnknown")
         self.check_endstop_button = QPushButton("Check X Endstop (M119)")
+        self.endstop_monitor_check = QCheckBox(
+            "Live endstop monitor (M119 every 0.5 s, no motion)"
+        )
+        self.endstop_changes_label = QLabel("State changes seen: 0")
+        self.endstop_wiring_label = QLabel(
+            "Endstop wiring: switch signal on X-STOP pin PC0, ground on X-STOP GND. "
+            "Remove the X-DIAG jumper when a mechanical switch is used. Press and "
+            "release the lever with the monitor on: the state must follow the lever."
+        )
+        self.endstop_wiring_label.setWordWrap(True)
+        self.endstop_wiring_label.setObjectName("safetyNote")
         self.home_distance_spin = self._make_spin(0.0, 100000.0, 1, 0.0)
         self.home_distance_spin.setSpecialValueText("0 (standard slow homing)")
         self.jog_distance_spin = self._make_spin(0.001, 1000.0, 3, 1.0)
@@ -642,33 +683,37 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("X-min endstop"), 1, 0)
         layout.addWidget(self.endstop_status_label, 1, 1)
         layout.addWidget(self.check_endstop_button, 1, 2, 1, 2)
-        layout.addWidget(QLabel("Estimated distance to home (mm)"), 2, 0)
-        layout.addWidget(self.home_distance_spin, 2, 1)
-        layout.addWidget(self.staged_home_label, 2, 2, 1, 2)
-        layout.addWidget(QLabel("Jog distance (mm)"), 3, 0)
-        layout.addWidget(self.jog_distance_spin, 3, 1)
-        layout.addWidget(self.jog_minus_button, 3, 2)
-        layout.addWidget(self.jog_plus_button, 3, 3)
-        layout.addWidget(QLabel("Absolute X (mm)"), 4, 0)
-        layout.addWidget(self.absolute_x_spin, 4, 1)
-        layout.addWidget(self.move_absolute_button, 4, 2, 1, 2)
-        layout.addWidget(QLabel("Speed (mm/s)"), 5, 0)
-        layout.addWidget(self.speed_spin, 5, 1)
-        layout.addWidget(QLabel("Acceleration (mm/s^2)"), 5, 2)
-        layout.addWidget(self.accel_spin, 5, 3)
-        layout.addWidget(QLabel("Software travel limit (mm)"), 6, 0)
-        layout.addWidget(self.travel_limit_spin, 6, 1)
-        layout.addWidget(self.allow_unhomed_check, 6, 2, 1, 2)
-        layout.addWidget(self.axis_convention_label, 7, 0, 1, 4)
-        layout.addWidget(self.quick_stop_button, 8, 0)
-        layout.addWidget(self.emergency_stop_button, 8, 1)
-        layout.addWidget(self.motors_off_button, 8, 2)
+        layout.addWidget(self.endstop_monitor_check, 2, 0, 1, 2)
+        layout.addWidget(self.endstop_changes_label, 2, 2, 1, 2)
+        layout.addWidget(self.endstop_wiring_label, 3, 0, 1, 4)
+        layout.addWidget(QLabel("Estimated distance to home (mm)"), 4, 0)
+        layout.addWidget(self.home_distance_spin, 4, 1)
+        layout.addWidget(self.staged_home_label, 4, 2, 1, 2)
+        layout.addWidget(QLabel("Jog distance (mm)"), 5, 0)
+        layout.addWidget(self.jog_distance_spin, 5, 1)
+        layout.addWidget(self.jog_minus_button, 5, 2)
+        layout.addWidget(self.jog_plus_button, 5, 3)
+        layout.addWidget(QLabel("Absolute X (mm)"), 6, 0)
+        layout.addWidget(self.absolute_x_spin, 6, 1)
+        layout.addWidget(self.move_absolute_button, 6, 2, 1, 2)
+        layout.addWidget(QLabel("Speed (mm/s)"), 7, 0)
+        layout.addWidget(self.speed_spin, 7, 1)
+        layout.addWidget(QLabel("Acceleration (mm/s^2)"), 7, 2)
+        layout.addWidget(self.accel_spin, 7, 3)
+        layout.addWidget(QLabel("Software travel limit (mm)"), 8, 0)
+        layout.addWidget(self.travel_limit_spin, 8, 1)
+        layout.addWidget(self.allow_unhomed_check, 8, 2, 1, 2)
+        layout.addWidget(self.axis_convention_label, 9, 0, 1, 4)
+        layout.addWidget(self.quick_stop_button, 10, 0)
+        layout.addWidget(self.emergency_stop_button, 10, 1)
+        layout.addWidget(self.motors_off_button, 10, 2)
         layout.setColumnStretch(4, 1)
-        layout.setRowStretch(9, 1)
+        layout.setRowStretch(11, 1)
 
         self.home_button.clicked.connect(self._home_x)
         self.read_position_button.clicked.connect(self._read_position)
         self.check_endstop_button.clicked.connect(self._check_x_endstop)
+        self.endstop_monitor_check.toggled.connect(self._toggle_endstop_monitor)
         self.jog_minus_button.clicked.connect(lambda: self._jog_x(-1.0))
         self.jog_plus_button.clicked.connect(lambda: self._jog_x(1.0))
         self.move_absolute_button.clicked.connect(self._move_absolute_x)
@@ -695,20 +740,39 @@ class MainWindow(QMainWindow):
         self.wait_bed_button = QPushButton("Set and Wait")
         self.heater_off_button = QPushButton("Heater Off")
         self.heater_off_button.setObjectName("warningButton")
+        self.bed_power_label = QLabel("Unknown")
+        self.bed_power_label.setObjectName("temperatureReadout")
+        self.thermistor_status_label = QLabel("Unknown")
+        self.thermistor_status_label.setObjectName("endstopUnknown")
+        self.thermistor_status_label.setWordWrap(True)
+        self.bed_wiring_label = QLabel(
+            "Heater wiring: the silicone pad's two heater wires go to the HB screw "
+            "terminal (switched by PC9) and the two thin thermistor wires go to the "
+            "THB connector (GND + PC4). The pad voltage must equal the power supply "
+            "voltage. A mains-voltage (230 V) pad must never be connected to HB: it "
+            "needs a solid-state relay driven by HB. See COLLEGAMENTI_SKR_MINI_E3_V3.md."
+        )
+        self.bed_wiring_label.setWordWrap(True)
+        self.bed_wiring_label.setObjectName("safetyNote")
 
         layout.addWidget(QLabel("Current bed temperature (deg C)"), 0, 0)
         layout.addWidget(self.current_bed_label, 0, 1)
         layout.addWidget(QLabel("Target bed temperature (deg C)"), 1, 0)
         layout.addWidget(self.target_bed_label, 1, 1)
-        layout.addWidget(QLabel("Setpoint (deg C)"), 2, 0)
-        layout.addWidget(self.bed_setpoint_spin, 2, 1)
-        layout.addWidget(QLabel("Safety limit (deg C)"), 3, 0)
-        layout.addWidget(self.bed_safety_spin, 3, 1)
-        layout.addWidget(self.set_bed_button, 4, 0)
-        layout.addWidget(self.wait_bed_button, 4, 1)
-        layout.addWidget(self.heater_off_button, 4, 2)
+        layout.addWidget(QLabel("Heater power (Marlin B@)"), 2, 0)
+        layout.addWidget(self.bed_power_label, 2, 1)
+        layout.addWidget(QLabel("Thermistor / heater check"), 3, 0)
+        layout.addWidget(self.thermistor_status_label, 3, 1, 1, 2)
+        layout.addWidget(QLabel("Setpoint (deg C)"), 4, 0)
+        layout.addWidget(self.bed_setpoint_spin, 4, 1)
+        layout.addWidget(QLabel("Safety limit (deg C)"), 5, 0)
+        layout.addWidget(self.bed_safety_spin, 5, 1)
+        layout.addWidget(self.set_bed_button, 6, 0)
+        layout.addWidget(self.wait_bed_button, 6, 1)
+        layout.addWidget(self.heater_off_button, 6, 2)
+        layout.addWidget(self.bed_wiring_label, 7, 0, 1, 3)
         layout.setColumnStretch(3, 1)
-        layout.setRowStretch(5, 1)
+        layout.setRowStretch(8, 1)
 
         self.set_bed_button.clicked.connect(lambda: self._set_bed_temperature(wait=False))
         self.wait_bed_button.clicked.connect(lambda: self._set_bed_temperature(wait=True))
@@ -919,11 +983,41 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(250, lambda: self._initialize_controller(generation))
             return
         self._run_command_sequence(
-            [CommandSpec("M115", wait_for_ok=True, timeout=15.0)],
+            [
+                CommandSpec("M115", wait_for_ok=True, timeout=15.0),
+                CommandSpec(
+                    "M105",
+                    wait_for_ok=True,
+                    timeout=10.0,
+                    capture_response=True,
+                ),
+            ],
             "Marlin controller ready.",
             self._controller_initialized,
+            on_response=self._check_bed_reported,
             require_ready=False,
         )
+
+    def _check_bed_reported(self, response_lines: list[str]) -> None:
+        """Warn when the flashed Marlin build has no bed heater configured."""
+        self.bed_available = response_reports_bed(response_lines)
+        self._update_bed_controls()
+        if not self.bed_available:
+            self._set_thermistor_status(
+                "Marlin reports no bed temperature (no B: in M105).", fault=True
+            )
+            self._show_error(
+                "Marlin does not report a bed temperature, so this firmware has no "
+                "bed heater configured (TEMP_SENSOR_BED is 0). Bed heating is "
+                "disabled in the app. Rebuild Marlin with TEMP_SENSOR_BED set to the "
+                "pad thermistor type (usually 1 for a 100k NTC); the SKR Mini E3 V3 "
+                "pins are HEATER_BED_PIN PC9 and TEMP_BED_PIN PC4."
+            )
+
+    def _update_bed_controls(self) -> None:
+        enabled = self.bed_available is not False
+        self.set_bed_button.setEnabled(enabled)
+        self.wait_bed_button.setEnabled(enabled)
 
     def _controller_initialized(self) -> None:
         self.emergency_latched = False
@@ -952,6 +1046,11 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Disconnected.")
 
     def _update_connection_ui(self, connected: bool) -> None:
+        if not connected:
+            self._stop_endstop_monitor()
+            self.bed_available = None
+            self.bed_heating_watch.reset()
+            self._update_bed_controls()
         self.connect_button.setEnabled(not connected)
         self.disconnect_button.setEnabled(connected)
         self.status_label.setText("Connected" if connected else "Disconnected")
@@ -970,6 +1069,13 @@ class MainWindow(QMainWindow):
             current, target = bed
             self.current_bed_label.setText(f"{current:.1f}")
             self.target_bed_label.setText("Unknown" if target is None else f"{target:.1f}")
+            self._check_bed_health(current, target)
+
+        bed_power = parse_bed_power(line)
+        if bed_power is not None:
+            self.bed_power_label.setText(
+                f"{bed_power_percent(bed_power):.0f} % (B@:{bed_power})"
+            )
 
         x_position = parse_x_position(line)
         if x_position is not None:
@@ -984,7 +1090,55 @@ class MainWindow(QMainWindow):
         if x_min_triggered is not None:
             self._set_x_endstop_status(x_min_triggered)
 
+    def _check_bed_health(self, current: float, target: float | None) -> None:
+        fault = classify_bed_reading(current)
+        if fault is not None:
+            first_report = fault != self.thermistor_fault
+            self.thermistor_fault = fault
+            self._set_thermistor_status(fault, fault=True)
+            self.bed_heating_watch.reset()
+            if first_report:
+                if target is not None and target > 0:
+                    self._heater_off()
+                self._show_error(fault)
+            return
+        if self.thermistor_fault is not None:
+            self.thermistor_fault = None
+        warning = self.bed_heating_watch.update(self._clock(), current, target)
+        if warning is not None:
+            self._set_thermistor_status("Bed is not heating - heater switched off.", fault=True)
+            self._heater_off()
+            self._show_error(warning)
+            return
+        if target is not None and target > 0:
+            self._set_thermistor_status(
+                f"Thermistor plausible; heating toward {target:g} deg C.", fault=False
+            )
+        else:
+            self._set_thermistor_status("Thermistor plausible; heater off.", fault=False)
+
+    def _set_thermistor_status(self, text: str, *, fault: bool) -> None:
+        self.thermistor_status_label.setText(text)
+        self.thermistor_status_label.setObjectName(
+            "faultReadout" if fault else "endstopTriggered"
+        )
+        self.thermistor_status_label.style().unpolish(self.thermistor_status_label)
+        self.thermistor_status_label.style().polish(self.thermistor_status_label)
+
+    @staticmethod
+    def _clock() -> float:
+        return time.monotonic()
+
     def _set_x_endstop_status(self, triggered: bool) -> None:
+        if (
+            self.last_x_endstop_state is not None
+            and triggered != self.last_x_endstop_state
+        ):
+            self.endstop_transitions += 1
+            self.endstop_changes_label.setText(
+                f"State changes seen: {self.endstop_transitions}"
+            )
+        self.last_x_endstop_state = triggered
         self.endstop_status_label.setText(
             "TRIGGERED (lever pressed)" if triggered else "OPEN (lever released)"
         )
@@ -1011,7 +1165,9 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Marlin is KILLED; reset or power-cycle required.")
             return
         self.statusBar().showMessage(f"Marlin warning: {line}")
-        QMessageBox.warning(self, "Marlin Warning", line)
+        hint = explain_marlin_message(line)
+        message = line if hint is None else f"{line}\n\n{hint}"
+        QMessageBox.warning(self, "Marlin Warning", message)
 
     def _handle_serial_disconnect(self, message: str) -> None:
         self._append_log(message)
@@ -1253,6 +1409,61 @@ class MainWindow(QMainWindow):
             "X-min endstop state read.",
             on_response=verify_response,
         )
+
+    def _toggle_endstop_monitor(self, enabled: bool) -> None:
+        if not enabled:
+            self.endstop_timer.stop()
+            return
+        if not self.serial_link.is_connected or not self.controller_ready:
+            self._stop_endstop_monitor()
+            self._show_error("Connect and wait for Ready before starting the monitor.")
+            return
+        self.endstop_transitions = 0
+        self.last_x_endstop_state = None
+        self.endstop_changes_label.setText("State changes seen: 0")
+        self.endstop_timer.start()
+        self.statusBar().showMessage(
+            "Live endstop monitor running: press and release the X-min lever."
+        )
+
+    def _stop_endstop_monitor(self) -> None:
+        self.endstop_timer.stop()
+        if hasattr(self, "endstop_monitor_check"):
+            self.endstop_monitor_check.blockSignals(True)
+            self.endstop_monitor_check.setChecked(False)
+            self.endstop_monitor_check.blockSignals(False)
+
+    def _poll_endstop(self) -> None:
+        if not self.serial_link.is_connected or not self.controller_ready:
+            return
+        # Never interleave with homing, motion, or profile command sequences.
+        if self._operation_active() or self.endstop_poll_active:
+            return
+        self.endstop_poll_active = True
+        threading.Thread(
+            target=self._endstop_poll_worker,
+            name="MarlinEndstopPoll",
+            daemon=True,
+        ).start()
+
+    def _endstop_poll_worker(self) -> None:
+        try:
+            # The reply is parsed by _handle_serial_line, which updates the label.
+            self.serial_link.send_command(
+                "M119",
+                wait_for_ok=True,
+                timeout=3.0,
+                block=False,
+            )
+        except Exception as exc:  # noqa: BLE001
+            if self.serial_link.is_connected:
+                self.bridge.endstop_poll_failed.emit(str(exc))
+        finally:
+            self.endstop_poll_active = False
+
+    def _endstop_poll_failed(self, message: str) -> None:
+        self._stop_endstop_monitor()
+        self._show_error(f"Endstop monitor stopped: {message}")
 
     def _jog_x(self, direction: float) -> None:
         if not self._absolute_motion_allowed():
@@ -1588,6 +1799,15 @@ class MainWindow(QMainWindow):
             self._show_error(str(exc))
             return
 
+        if self.bed_available is False and any(
+            segment.bed_temp_c is not None for segment in profile.segments
+        ):
+            self._show_error(
+                "This profile sets bed temperatures, but the connected Marlin build "
+                "has no bed heater configured."
+            )
+            return
+
         hot_segments = [
             segment.bed_temp_c
             for segment in profile.segments
@@ -1762,6 +1982,7 @@ class MainWindow(QMainWindow):
             self._stop_profile()
 
         self.temp_timer.stop()
+        self.endstop_timer.stop()
         if self.serial_link.is_connected:
             try:
                 if self._operation_active():

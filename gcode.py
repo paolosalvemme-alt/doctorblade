@@ -12,6 +12,7 @@ _BED_RE = re.compile(
     rf"\bB:\s*(?P<current>{_NUMBER_RE})(?:\s*/\s*(?P<target>{_NUMBER_RE}))?",
     re.IGNORECASE,
 )
+_BED_POWER_RE = re.compile(r"\bB@:\s*(?P<power>\d+)", re.IGNORECASE)
 _X_POS_RE = re.compile(rf"(?:^|\s)X:\s*(?P<x>{_NUMBER_RE})(?:\s|$)", re.IGNORECASE)
 _X_STEPS_RE = re.compile(
     rf"(?:^|\s)M92\b[^\r\n]*?(?:^|\s)X\s*(?P<x>{_NUMBER_RE})(?:\s|$)",
@@ -121,6 +122,19 @@ def parse_bed_temp(line: str) -> tuple[float, float | None] | None:
     target_text = match.group("target")
     target = float(target_text) if target_text is not None else None
     return current, target
+
+
+def parse_bed_power(line: str) -> int | None:
+    """Parse Marlin's bed heater PWM value (B@, 0..127) from an M105 response."""
+    match = _BED_POWER_RE.search(line)
+    if not match:
+        return None
+    return int(match.group("power"))
+
+
+def response_reports_bed(lines: Iterable[str]) -> bool:
+    """Return True if an M105 response contains a bed temperature (B:)."""
+    return any(parse_bed_temp(line) is not None for line in lines)
 
 
 def parse_x_position(line: str) -> float | None:

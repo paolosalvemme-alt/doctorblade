@@ -1,3 +1,27 @@
+# Doctor Blade Controller V3.0.6
+
+Release date: 2026-11-13
+
+## Commissioning Diagnostics
+
+- Added a live X-min endstop monitor that repeats `M119` every 0.5 s without
+  motion, never interleaves with other operations, and counts lever
+  transitions.
+- The bed tab shows Marlin heater power (`B@`) and a thermistor/heater status.
+- Implausible thermistor readings are flagged; the heater is switched off if
+  one occurs while a target is set.
+- An application heating watch switches the heater off if the bed rises less
+  than 2 deg C in 120 s while far below target.
+- The startup handshake now also sends `M105` and disables bed commands if the
+  firmware reports no bed temperature (`TEMP_SENSOR_BED 0`). Profiles that set
+  bed temperatures are blocked in that case.
+- Marlin errors such as `MINTEMP`, `MAXTEMP`, `Heating failed`,
+  `Thermal Runaway` and `Homing Failed` are shown with a wiring hint.
+- Added `COLLEGAMENTI_SKR_MINI_E3_V3.md` (Italian) with SKR Mini E3 V3 wiring
+  for the X-min endstop, the silicone pad heater, and the bed thermistor.
+- The executable name is unchanged (`DoctorBladeControllerV305.exe`) so the
+  existing build script and settings location keep working.
+
 # Doctor Blade Controller V3.0.5
 
 Release date: 2026-06-09

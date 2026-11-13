@@ -1,7 +1,15 @@
-# Doctor Blade Controller V3.0.5
+# Doctor Blade Controller V3.0.6
 
 Safety-focused Windows desktop application for controlling a laboratory doctor
 blade coater driven by a BIGTREETECH SKR Mini E3 V3 running Marlin firmware.
+
+Version 3.0.6 adds commissioning diagnostics for the two parts that most often
+fail on a new build: a live X-min endstop monitor and bed heater checks
+(heater power, thermistor plausibility, a heating watch that switches the
+heater off if the bed does not warm up, and detection of firmware built without
+a bed heater). Wiring for the SKR Mini E3 V3 endstop, silicone pad heater and
+thermistor is described in Italian in
+[`COLLEGAMENTI_SKR_MINI_E3_V3.md`](COLLEGAMENTI_SKR_MINI_E3_V3.md).
 
 Version 3.0.5 adds optional staged X homing from an operator-entered approximate
 distance. It keeps a 40 mm slow zone, enables the mechanical X-min endstop with
@@ -137,6 +145,9 @@ Available controls:
 - **Estimated distance to home** optionally enables a confirmed 10 mm/s pre-approach while retaining a 40 mm slow zone
 - **Read Position** sends `M114` and parses the X position
 - **Check X Endstop (M119)** reads X-min without moving the machine
+- **Live endstop monitor** repeats `M119` every 0.5 s while no other machine
+  operation is running, shows the X-min state, and counts state changes so the
+  switch wiring can be checked by pressing the lever by hand
 - **Jog -X (toward home)** performs a relative move toward X-min
 - **Jog +X (away from home)** performs a relative move into the usable coating stroke
 - **Move to X** performs an absolute X move
@@ -202,6 +213,19 @@ sends `M999` automatically.
 
 The heated bed panel can:
 
+- Show the heater power reported by Marlin (`B@`, 0..127, shown as a percentage)
+- Flag implausible thermistor readings (below -5 deg C: open thermistor; above
+  150 deg C: short circuit or wrong sensor type) and switch the heater off if
+  one occurs while heating
+- Switch the heater off and explain the likely wiring fault if the bed rises
+  less than 2 deg C in 120 s while the target is more than 5 deg C above the
+  current temperature (Marlin's own thermal protection remains the primary
+  safeguard)
+- Detect at connection time whether Marlin reports a bed temperature at all;
+  if not, the firmware has no bed configured and bed heating is disabled in the
+  app
+- Add a wiring hint to Marlin errors such as `MINTEMP`, `MAXTEMP`,
+  `Heating failed` and `Thermal Runaway`
 - Set bed temperature with `M140 S...`
 - Set and wait with `M190 S...`
 - Turn the heater off with `M140 S0`
@@ -277,12 +301,12 @@ G-code or running a loaded profile.
 | `G4 S<seconds>` | Dwell for a profile segment | Yes | Used only for non-negative profile dwell values |
 | `M18` | Disable stepper motors | No | Invalidates known X position; re-home afterward |
 | `M92 X<steps/mm>` | Set X-axis steps per millimeter | No | Calibration only; followed by `M500` |
-| `M105` | Report temperatures | No | Non-blocking periodic polling |
+| `M105` | Report temperatures | No | Non-blocking periodic polling; also sent once after `M115` at connection to check that the firmware reports a bed (`B:`) |
 | `M108` | Break out of a Marlin wait loop | Immediate only with `EMERGENCY_PARSER` | Used before profile cancellation or heater shutdown to interrupt `M190` |
 | `M112` | Emergency stop / kill | Immediate with Marlin emergency parser | Latches Marlin KILLED; requires physical reset or power-cycle before reconnecting |
 | `M114` | Report current position | No | Used after homing and calibration moves |
 | `M115` | Report firmware information | No | Startup handshake before normal controls are enabled |
-| `M119` | Report endstop states | No | Manual diagnostic and automatic pre-homing gate; X-min must be `open` before `G28 X` |
+| `M119` | Report endstop states | No | Manual diagnostic, live endstop monitor (every 0.5 s, skipped while any other operation runs), and automatic pre-homing gate; X-min must be `open` before `G28 X` |
 | `M120` | Enable physical endstop checks globally | No | Used before the optional unreferenced fast pre-approach so X-min can still stop negative motion; remains enabled as a conservative limit |
 | `M140 S<deg C>` | Set bed target without waiting | No | `S0` turns the heater off |
 | `M190 S<deg C>` | Set bed target and wait while heating | Yes | Uses the configured temperature safety confirmation |

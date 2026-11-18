@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -25,6 +26,8 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -300,7 +303,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(APP_DISPLAY_NAME)
-        self.resize(1100, 760)
+        self._fit_to_screen()
         self._apply_theme()
 
         self.settings_manager = SettingsManager()
@@ -353,18 +356,21 @@ class MainWindow(QMainWindow):
         central = QWidget()
         central.setObjectName("mainSurface")
         main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(14, 14, 14, 14)
-        main_layout.setSpacing(12)
+        main_layout.setContentsMargins(12, 10, 12, 10)
+        main_layout.setSpacing(8)
 
         main_layout.addWidget(self._connection_group())
 
         tabs = QTabWidget()
         tabs.setObjectName("mainTabs")
-        tabs.addTab(self._manual_motion_tab(), "Manual Motion")
-        tabs.addTab(self._heated_bed_tab(), "Heated Bed")
-        tabs.addTab(self._profile_tab(), "Coating Profile")
-        tabs.addTab(self._calibration_tab(), "Calibration")
-        main_layout.addWidget(tabs, stretch=1)
+        # Each page scrolls instead of being squeezed on short laptop screens.
+        tabs.addTab(self._scrollable(self._manual_motion_tab()), "Manual Motion")
+        tabs.addTab(self._scrollable(self._heated_bed_tab()), "Heated Bed")
+        tabs.addTab(self._scrollable(self._profile_tab()), "Coating Profile")
+        tabs.addTab(self._scrollable(self._calibration_tab()), "Calibration")
+
+        # Stop controls stay visible whatever tab is open or how far it is scrolled.
+        main_layout.addWidget(self._stop_bar())
 
         log_group = QGroupBox("Raw Serial Log")
         log_group.setObjectName("logGroup")
@@ -373,11 +379,52 @@ class MainWindow(QMainWindow):
         self.log_edit.setObjectName("serialLog")
         self.log_edit.setReadOnly(True)
         self.log_edit.document().setMaximumBlockCount(3000)
+        self.log_edit.setMinimumHeight(70)
         log_layout.addWidget(self.log_edit)
-        main_layout.addWidget(log_group, stretch=1)
+
+        # The operator can drag the divider to enlarge either the controls or the log.
+        splitter = QSplitter(Qt.Vertical)
+        splitter.setObjectName("mainSplitter")
+        splitter.setChildrenCollapsible(False)
+        splitter.addWidget(tabs)
+        splitter.addWidget(log_group)
+        splitter.setStretchFactor(0, 4)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([560, 110])
+        main_layout.addWidget(splitter, stretch=1)
 
         self.setCentralWidget(central)
         self.statusBar().showMessage("Disconnected.")
+
+    def _stop_bar(self) -> QWidget:
+        bar = QWidget()
+        bar.setObjectName("stopBar")
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.quick_stop_button, stretch=1)
+        layout.addWidget(self.emergency_stop_button, stretch=1)
+        layout.addWidget(self.motors_off_button, stretch=1)
+        return bar
+
+    @staticmethod
+    def _scrollable(page: QWidget) -> QScrollArea:
+        area = QScrollArea()
+        area.setObjectName("pageScroll")
+        area.setWidgetResizable(True)
+        area.setFrameShape(QFrame.NoFrame)
+        area.setWidget(page)
+        return area
+
+    def _fit_to_screen(self) -> None:
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            self.resize(1100, 760)
+            return
+        available = screen.availableGeometry()
+        self.resize(
+            min(1150, max(800, available.width() - 40)),
+            min(820, max(600, available.height() - 60)),
+        )
 
     def _apply_theme(self) -> None:
         self.setStyleSheet(
@@ -456,7 +503,11 @@ class MainWindow(QMainWindow):
             QDoubleSpinBox {
                 min-height: 24px;
             }
+            QScrollArea#pageScroll, QScrollArea#pageScroll > QWidget > QWidget {
+                background: transparent;
+            }
             QPushButton {
+                min-height: 20px;
                 background: #ffffff;
                 border: 1px solid #9cadbf;
                 border-radius: 6px;
@@ -704,11 +755,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.travel_limit_spin, 8, 1)
         layout.addWidget(self.allow_unhomed_check, 8, 2, 1, 2)
         layout.addWidget(self.axis_convention_label, 9, 0, 1, 4)
-        layout.addWidget(self.quick_stop_button, 10, 0)
-        layout.addWidget(self.emergency_stop_button, 10, 1)
-        layout.addWidget(self.motors_off_button, 10, 2)
-        layout.setColumnStretch(4, 1)
-        layout.setRowStretch(11, 1)
+        for column in (1, 2, 3):
+            layout.setColumnStretch(column, 1)
+        layout.setRowStretch(10, 1)
 
         self.home_button.clicked.connect(self._home_x)
         self.read_position_button.clicked.connect(self._read_position)
@@ -876,6 +925,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.read_steps_button, 5, 0, 1, 2)
         layout.addWidget(self.run_calibration_move_button, 6, 0, 1, 2)
         layout.addWidget(self.apply_calibration_button, 7, 0, 1, 2)
+        layout.setColumnStretch(1, 1)
         layout.setColumnStretch(2, 1)
         layout.setRowStretch(8, 1)
 

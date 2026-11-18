@@ -137,6 +137,11 @@ Open **Device Manager**, then expand **Ports (COM & LPT)**. The SKR board usuall
 
 ## Manual Controls
 
+**Quick Stop**, **Emergency Stop** and **Motors Off** are in a bar above the
+tabs, so they stay visible whatever tab is open. The tab pages scroll on short
+screens (for example 1366x768 laptops) instead of compressing the controls, and
+the divider above the serial log can be dragged to resize it.
+
 Use **Home X** before absolute motion. The app blocks absolute moves and profile runs until homing has been done unless **Allow movement before homing** is enabled.
 
 Available controls:

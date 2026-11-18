@@ -19,6 +19,10 @@ Release date: 2026-11-13
   `Thermal Runaway` and `Homing Failed` are shown with a wiring hint.
 - Added `COLLEGAMENTI_SKR_MINI_E3_V3.md` (Italian) with SKR Mini E3 V3 wiring
   for the X-min endstop, the silicone pad heater, and the bed thermistor.
+- Layout fix for short screens: tab pages scroll instead of clipping
+  buttons and notes, the serial log sits under a draggable divider, the
+  window size adapts to the screen, and the stop buttons moved to an
+  always-visible bar above the tabs.
 - The executable name is unchanged (`DoctorBladeControllerV305.exe`) so the
   existing build script and settings location keep working.
 

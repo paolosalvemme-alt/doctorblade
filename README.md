@@ -108,13 +108,13 @@ build_exe.bat
 The build script installs dependencies, runs tests, then builds:
 
 ```text
-dist\DoctorBladeControllerV305.exe
+dist\DoctorBladeControllerV306.exe
 ```
 
 The PyInstaller command used by the script is:
 
 ```bat
-python -m PyInstaller --noconfirm --onefile --windowed --name DoctorBladeControllerV305 main.py
+python -m PyInstaller --noconfirm --onefile --windowed --name DoctorBladeControllerV306 main.py
 ```
 
 ## Connect to the SKR Mini E3 V3

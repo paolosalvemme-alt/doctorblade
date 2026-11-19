@@ -22,7 +22,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='DoctorBladeControllerV305',
+    name='DoctorBladeControllerV306',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

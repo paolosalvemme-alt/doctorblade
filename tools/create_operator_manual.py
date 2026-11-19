@@ -658,7 +658,7 @@ def build_manual() -> Path:
     number_id = add_numbering_instance(doc, decimal_abstract_id)
     for step in [
         "Aprire la cartella dist della release V3.",
-        "Avviare DoctorBladeControllerV305.exe.",
+        "Avviare DoctorBladeControllerV306.exe.",
         "Se Windows SmartScreen blocca l’avvio, verificare provenienza e hash del file prima di autorizzarlo.",
         "Non eseguire contemporaneamente altri programmi che tengono aperta la stessa porta COM.",
     ]:

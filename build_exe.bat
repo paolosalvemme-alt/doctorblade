@@ -27,10 +27,10 @@ if errorlevel 1 (
 )
 
 echo Building Windows executable...
-%PYTHON_CMD% -m PyInstaller --noconfirm --onefile --windowed --name DoctorBladeControllerV305 main.py
+%PYTHON_CMD% -m PyInstaller --noconfirm --onefile --windowed --name DoctorBladeControllerV306 main.py
 if errorlevel 1 (
     echo PyInstaller build failed.
     exit /b 1
 )
 
-echo Build complete: dist\DoctorBladeControllerV305.exe
+echo Build complete: dist\DoctorBladeControllerV306.exe

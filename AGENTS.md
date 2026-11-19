@@ -64,5 +64,5 @@ build_exe.bat
 - The expected executable path is:
 
 ```text
-dist\DoctorBladeControllerV305.exe
+dist\DoctorBladeControllerV306.exe
 ```

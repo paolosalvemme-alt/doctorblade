@@ -17,6 +17,7 @@ from gcode import (
     parse_x_steps,
     staged_home_pretravel,
     validate_x_min_open_response,
+    validate_x_min_released_response,
 )
 
 
@@ -79,3 +80,14 @@ def test_x_min_multiline_response_is_validated_before_homing() -> None:
         validate_x_min_open_response(triggered_response)
     with pytest.raises(ValueError, match="did not report x_min"):
         validate_x_min_open_response(["y_min: open", "ok"])
+
+
+def test_released_response_accepts_open_switch_after_homing() -> None:
+    validate_x_min_released_response(["x_min: open", "ok"], 5.0)
+
+
+def test_released_response_rejects_pressed_or_missing_switch() -> None:
+    with pytest.raises(ValueError, match="still TRIGGERED after moving 5 mm"):
+        validate_x_min_released_response(["x_min: TRIGGERED", "ok"], 5.0)
+    with pytest.raises(ValueError, match="did not report x_min"):
+        validate_x_min_released_response(["ok"], 5.0)

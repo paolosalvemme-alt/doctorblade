@@ -182,3 +182,21 @@ def validate_x_min_open_response(lines: Iterable[str]) -> None:
         raise ValueError(
             "Homing blocked: X-min is already TRIGGERED. Release or inspect the switch."
         )
+
+
+def validate_x_min_released_response(
+    lines: Iterable[str],
+    release_distance_mm: float,
+) -> None:
+    """Reject the post-homing state unless the X-min lever is released again."""
+    state = parse_x_min_endstop_response(lines)
+    if state is None:
+        raise ValueError(
+            "Homing not confirmed: M119 did not report x_min after the release move."
+        )
+    if state:
+        raise ValueError(
+            "Homing not confirmed: X-min is still TRIGGERED after moving "
+            f"{format_gcode_number(release_distance_mm)} mm away from the switch. "
+            "Check that the lever is free and not bent, and inspect the switch wiring."
+        )

@@ -2,6 +2,15 @@
 
 Release date: 2026-11-13
 
+## Switch Release After Homing
+
+- After `G28 X` the carriage now moves to `X=5 mm` at 5 mm/s so the X-min
+  lever is released. Previously Marlin left the carriage on the switch, and
+  the next **Home X** was blocked because X-min already read `TRIGGERED`.
+- A second `M119` confirms the lever reads `open` after the move; otherwise
+  homing is reported as failed and the position is invalidated.
+- Homing requires a software travel limit of at least 5 mm.
+
 ## Commissioning Diagnostics
 
 - Added a live X-min endstop monitor that repeats `M119` every 0.5 s without

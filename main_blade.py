@@ -53,6 +53,7 @@ from gcode import (
     response_reports_bed,
     staged_home_pretravel,
     validate_x_min_open_response,
+    validate_x_min_released_response,
 )
 from diagnostics import (
     BedHeatingWatch,
@@ -70,6 +71,10 @@ APP_VERSION = "3.0.6"
 STAGED_HOME_MARGIN_MM = 40.0
 STAGED_HOME_FAST_SPEED_MM_S = 10.0
 ENDSTOP_MONITOR_INTERVAL_MS = 500
+# After G28 X Marlin stops exactly where the lever triggers. Move this far
+# toward +X so the switch is released and the next homing is not blocked.
+POST_HOME_RELEASE_MM = 5.0
+POST_HOME_RELEASE_SPEED_MM_S = 5.0
 
 
 @dataclass(frozen=True)
@@ -1288,6 +1293,12 @@ class MainWindow(QMainWindow):
         except ValueError as exc:
             self._show_error(str(exc))
             return
+        if self.travel_limit_spin.value() < POST_HOME_RELEASE_MM:
+            self._show_error(
+                f"The software travel limit must be at least {POST_HOME_RELEASE_MM:g} mm "
+                "so the carriage can release the X-min switch after homing."
+            )
+            return
         if estimated_distance > self.travel_limit_spin.value():
             self._show_error(
                 "Estimated home distance cannot exceed the software travel limit."
@@ -1318,8 +1329,8 @@ class MainWindow(QMainWindow):
         def mark_homed() -> None:
             self.homed = True
             if self.current_x_mm is None:
-                self.current_x_mm = 0.0
-                self.current_x_label.setText("0.000 mm")
+                self.current_x_mm = POST_HOME_RELEASE_MM
+                self.current_x_label.setText(f"{POST_HOME_RELEASE_MM:.3f} mm")
 
         commands = [
             CommandSpec(
@@ -1358,13 +1369,30 @@ class MainWindow(QMainWindow):
             [
                 CommandSpec("G28 X", wait_for_ok=True, timeout=180.0),
                 CommandSpec("G90", wait_for_ok=True, timeout=10.0),
+                # Release the switch so the next homing starts from an open X-min.
+                CommandSpec(
+                    cmd_move_x(POST_HOME_RELEASE_MM, POST_HOME_RELEASE_SPEED_MM_S),
+                    wait_for_ok=True,
+                    timeout=10.0,
+                ),
+                CommandSpec("M400", wait_for_ok=True, timeout=60.0),
+                CommandSpec(
+                    "M119",
+                    wait_for_ok=True,
+                    timeout=10.0,
+                    capture_response=True,
+                    response_validator=lambda lines: validate_x_min_released_response(
+                        lines, POST_HOME_RELEASE_MM
+                    ),
+                ),
                 CommandSpec("M114", wait_for_ok=True, timeout=10.0),
             ]
         )
 
         self._run_command_sequence(
             commands,
-            "X homing complete. +X must move away from the X-min switch.",
+            f"X homing complete; carriage moved to X={POST_HOME_RELEASE_MM:g} mm "
+            "to release the switch.",
             mark_homed,
             invalidate_position_on_failure=True,
         )

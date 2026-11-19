@@ -152,9 +152,79 @@ def test_home_checks_x_min_before_sending_g28(window: MainWindow) -> None:
 
     window._home_x()
 
-    assert [item.command for item in captured] == ["M119", "G28 X", "G90", "M114"]
+    assert [item.command for item in captured] == [
+        "M119",
+        "G28 X",
+        "G90",
+        "G1 X5 F300",
+        "M400",
+        "M119",
+        "M114",
+    ]
     assert captured[0].capture_response is True
     assert captured[0].response_validator is not None
+    assert captured[5].capture_response is True
+    assert captured[5].response_validator is not None
+
+
+def test_home_release_check_rejects_switch_still_pressed(window: MainWindow) -> None:
+    captured = []
+
+    class FakeSerial:
+        is_connected = True
+
+    window.serial_link = FakeSerial()  # type: ignore[assignment]
+    window.controller_ready = True
+    window._run_command_sequence = (  # type: ignore[method-assign]
+        lambda commands, *args, **kwargs: captured.extend(commands)
+    )
+
+    window._home_x()
+
+    release_check = captured[5].response_validator
+    release_check(["Reporting endstop status", "x_min: open", "ok"])
+    with pytest.raises(ValueError, match="still TRIGGERED"):
+        release_check(["Reporting endstop status", "x_min: TRIGGERED", "ok"])
+
+
+def test_home_marks_release_position_when_m114_is_missing(window: MainWindow) -> None:
+    callbacks = []
+
+    class FakeSerial:
+        is_connected = True
+
+    window.serial_link = FakeSerial()  # type: ignore[assignment]
+    window.controller_ready = True
+    window._run_command_sequence = (  # type: ignore[method-assign]
+        lambda commands, message, on_success=None, **kwargs: callbacks.append(on_success)
+    )
+
+    window._home_x()
+    callbacks[0]()
+
+    assert window.homed is True
+    assert window.current_x_mm == 5.0
+
+
+def test_home_requires_travel_for_switch_release(window: MainWindow) -> None:
+    messages: list[str] = []
+    captured = []
+
+    class FakeSerial:
+        is_connected = True
+
+    window.serial_link = FakeSerial()  # type: ignore[assignment]
+    window.controller_ready = True
+    window.travel_limit_spin.setValue(3.0)
+    window._show_error = messages.append  # type: ignore[method-assign]
+    window._run_command_sequence = (  # type: ignore[method-assign]
+        lambda commands, *args, **kwargs: captured.extend(commands)
+    )
+
+    window._home_x()
+
+    assert captured == []
+    assert "at least 5 mm" in messages[0]
 
 
 def test_staged_home_uses_guarded_fast_preapproach(
@@ -191,10 +261,14 @@ def test_staged_home_uses_guarded_fast_preapproach(
         "M119",
         "G28 X",
         "G90",
+        "G1 X5 F300",
+        "M400",
+        "M119",
         "M114",
     ]
     assert captured[0].response_validator is not None
     assert captured[6].response_validator is not None
+    assert captured[11].response_validator is not None
     assert window.home_distance_spin.value() == 0.0
 
 

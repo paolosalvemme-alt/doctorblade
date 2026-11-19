@@ -141,7 +141,12 @@ Use **Home X** before absolute motion. The app blocks absolute moves and profile
 
 Available controls:
 
-- **Home X** first sends `M119` and proceeds with `G28 X` only if X-min is explicitly `open`
+- **Home X** first sends `M119` and proceeds with `G28 X` only if X-min is explicitly `open`.
+  After homing it moves the carriage to `X=5 mm` at 5 mm/s (`G1 X5 F300`, `M400`)
+  so the switch lever is released, then checks with `M119` that X-min reads
+  `open` again. If the lever is still pressed, homing is reported as failed
+  and the position is invalidated. The software travel limit must be at least
+  5 mm.
 - **Estimated distance to home** optionally enables a confirmed 10 mm/s pre-approach while retaining a 40 mm slow zone
 - **Read Position** sends `M114` and parses the X position
 - **Check X Endstop (M119)** reads X-min without moving the machine
@@ -294,10 +299,10 @@ G-code or running a loaded profile.
 | Command | Action | Can block | Safety and usage |
 | --- | --- | --- | --- |
 | `G21` | Select millimeter units | No | Sent at profile start |
-| `G28 X` | Home the X axis toward the configured X endstop | Yes | Sent only after an automatic `M119` confirms X-min is open |
+| `G28 X` | Home the X axis toward the configured X endstop | Yes | Sent only after an automatic `M119` confirms X-min is open; followed by `G1 X5 F300` to release the switch |
 | `G90` | Select absolute positioning | No | Used before absolute and profile moves |
 | `G91` | Select relative positioning | No | Used only inside atomic jog or staged-homing sequences |
-| `G1 X<mm> F<mm/min>` | Move X at the requested feedrate | Motion continues asynchronously | Targets are checked against the software travel limit |
+| `G1 X<mm> F<mm/min>` | Move X at the requested feedrate | Motion continues asynchronously | Targets are checked against the software travel limit; `G1 X5 F300` is also sent after `G28 X` to release the X-min lever |
 | `G4 S<seconds>` | Dwell for a profile segment | Yes | Used only for non-negative profile dwell values |
 | `M18` | Disable stepper motors | No | Invalidates known X position; re-home afterward |
 | `M92 X<steps/mm>` | Set X-axis steps per millimeter | No | Calibration only; followed by `M500` |
@@ -306,7 +311,7 @@ G-code or running a loaded profile.
 | `M112` | Emergency stop / kill | Immediate with Marlin emergency parser | Latches Marlin KILLED; requires physical reset or power-cycle before reconnecting |
 | `M114` | Report current position | No | Used after homing and calibration moves |
 | `M115` | Report firmware information | No | Startup handshake before normal controls are enabled |
-| `M119` | Report endstop states | No | Manual diagnostic, live endstop monitor (every 0.5 s, skipped while any other operation runs), and automatic pre-homing gate; X-min must be `open` before `G28 X` |
+| `M119` | Report endstop states | No | Manual diagnostic, live endstop monitor (every 0.5 s, skipped while any other operation runs), automatic pre-homing gate (X-min must be `open` before `G28 X`), and post-homing check that the lever was released after the 5 mm move |
 | `M120` | Enable physical endstop checks globally | No | Used before the optional unreferenced fast pre-approach so X-min can still stop negative motion; remains enabled as a conservative limit |
 | `M140 S<deg C>` | Set bed target without waiting | No | `S0` turns the heater off |
 | `M190 S<deg C>` | Set bed target and wait while heating | Yes | Uses the configured temperature safety confirmation |
